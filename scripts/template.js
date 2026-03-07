@@ -10,14 +10,14 @@ var pptxgen = require("pptxgenjs");
 // =============================================================================
 
 var COLORS = {
-  DARK_GREEN: "F00033",
-  CREAM_YELLOW: "333333",
-  LIGHT_GRAY: "FFF0F3",
-  TEXT_DARK: "1A1A1A",
-  TEXT_MEDIUM: "4A4A4A",
-  TEXT_LIGHT: "6B6B6B",
+  DARK_GREEN: "1B3360",
+  CREAM_YELLOW: "2A7B5B",
+  LIGHT_GRAY: "F2F4F7",
+  TEXT_DARK: "1B3360",
+  TEXT_MEDIUM: "434343",
+  TEXT_LIGHT: "6B7B8D",
   WHITE: "FFFFFF",
-  HIGHLIGHT_YELLOW: "F00033"
+  HIGHLIGHT_YELLOW: "0055A4"
 };
 
 var FONT = {
@@ -41,8 +41,8 @@ var config = {
 
 // グラフ用カラーパレット
 var CHART_COLORS = [
-  "F00033", "CC002A", "990020", "FF6680",
-  "333333", "666666", "999999", "CCCCCC"
+  "1B3360", "2A7B5B", "2D4A7A", "3A9472",
+  "0055A4", "1F5C6E", "132647", "7BC4A8"
 ];
 
 // =============================================================================
