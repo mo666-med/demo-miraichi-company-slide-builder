@@ -1,0 +1,9 @@
+node_modules/
+*.pptx
+*.pdf
+!downloads/pptx/*.pptx
+!downloads/pdf/*.pdf
+output/
+references/
+.env
+.DS_Store

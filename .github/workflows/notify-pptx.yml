@@ -1,0 +1,260 @@
+name: Notify Slides - Discord & Email (PPTX + PDF)
+
+on:
+  push:
+    paths:
+      - "downloads/pptx/*.pptx"
+      - "downloads/pdf/*.pdf"
+
+permissions:
+  contents: write
+
+jobs:
+  process-and-notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Detect new files
+        id: detect
+        run: |
+          # 直前のコミットで追加・変更された PPTX / PDF ファイルを取得
+          PPTX_FILES=$(git diff --name-only HEAD~1 HEAD -- 'downloads/pptx/*.pptx' || true)
+          PDF_FILES=$(git diff --name-only HEAD~1 HEAD -- 'downloads/pdf/*.pdf' || true)
+
+          if [ -z "$PPTX_FILES" ] && [ -z "$PDF_FILES" ]; then
+            echo "No new slide files found."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "found=true" >> "$GITHUB_OUTPUT"
+
+          # PPTX ファイル情報
+          if [ -n "$PPTX_FILES" ]; then
+            echo "pptx_found=true" >> "$GITHUB_OUTPUT"
+            FIRST_PPTX=$(echo "$PPTX_FILES" | head -1)
+            PPTX_BASENAME=$(basename "$FIRST_PPTX")
+            echo "first_pptx=$FIRST_PPTX" >> "$GITHUB_OUTPUT"
+            echo "pptx_basename=$PPTX_BASENAME" >> "$GITHUB_OUTPUT"
+            # 拡張子なしの名前（PDF変換用）
+            STEM="${PPTX_BASENAME%.pptx}"
+            echo "stem=$STEM" >> "$GITHUB_OUTPUT"
+          else
+            echo "pptx_found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # PDF ファイル情報
+          if [ -n "$PDF_FILES" ]; then
+            echo "pdf_found=true" >> "$GITHUB_OUTPUT"
+            FIRST_PDF=$(echo "$PDF_FILES" | head -1)
+            PDF_BASENAME=$(basename "$FIRST_PDF")
+            echo "first_pdf=$FIRST_PDF" >> "$GITHUB_OUTPUT"
+            echo "pdf_basename=$PDF_BASENAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "pdf_found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # =============================================
+      # PPTX → PDF 自動変換（PDFがまだない場合）
+      # =============================================
+      - name: Install LibreOffice and Japanese fonts
+        if: steps.detect.outputs.pptx_found == 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libreoffice-impress fonts-noto-cjk
+
+      - name: Convert PPTX to PDF
+        if: steps.detect.outputs.pptx_found == 'true'
+        id: convert
+        run: |
+          STEM="${{ steps.detect.outputs.stem }}"
+          PPTX_PATH="${{ steps.detect.outputs.first_pptx }}"
+          PDF_PATH="downloads/pdf/${STEM}.pdf"
+
+          if [ ! -f "$PDF_PATH" ]; then
+            echo "Converting $PPTX_PATH to PDF..."
+            libreoffice --headless --convert-to pdf --outdir downloads/pdf/ "$PPTX_PATH"
+            if [ -f "$PDF_PATH" ]; then
+              echo "converted=true" >> "$GITHUB_OUTPUT"
+              echo "pdf_path=$PDF_PATH" >> "$GITHUB_OUTPUT"
+              echo "pdf_basename=${STEM}.pdf" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::PDF conversion failed for $PPTX_PATH"
+              echo "converted=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "PDF already exists: $PDF_PATH"
+            echo "converted=false" >> "$GITHUB_OUTPUT"
+            echo "pdf_path=$PDF_PATH" >> "$GITHUB_OUTPUT"
+            echo "pdf_basename=${STEM}.pdf" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit auto-generated PDF
+        if: steps.convert.outputs.converted == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add downloads/pdf/
+          git commit -m "Auto-generate PDF: ${{ steps.convert.outputs.pdf_basename }}"
+          git push
+
+      # =============================================
+      # 通知用ファイルパスの確定
+      # =============================================
+      - name: Resolve file paths for notification
+        id: resolve
+        run: |
+          # PPTX パス
+          if [ "${{ steps.detect.outputs.pptx_found }}" == "true" ]; then
+            echo "pptx_path=${{ steps.detect.outputs.first_pptx }}" >> "$GITHUB_OUTPUT"
+            echo "pptx_basename=${{ steps.detect.outputs.pptx_basename }}" >> "$GITHUB_OUTPUT"
+          fi
+
+          # PDF パス（変換済み or 直接プッシュされたもの）
+          if [ "${{ steps.convert.outputs.pdf_path }}" != "" ]; then
+            echo "pdf_path=${{ steps.convert.outputs.pdf_path }}" >> "$GITHUB_OUTPUT"
+            echo "pdf_basename=${{ steps.convert.outputs.pdf_basename }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.detect.outputs.pdf_found }}" == "true" ]; then
+            echo "pdf_path=${{ steps.detect.outputs.first_pdf }}" >> "$GITHUB_OUTPUT"
+            echo "pdf_basename=${{ steps.detect.outputs.pdf_basename }}" >> "$GITHUB_OUTPUT"
+          fi
+
+          # 通知用の表示名（拡張子なし = スライドタイトル）
+          if [ "${{ steps.detect.outputs.pptx_found }}" == "true" ]; then
+            echo "display_name=${{ steps.detect.outputs.pptx_basename }}" >> "$GITHUB_OUTPUT"
+            TITLE="${{ steps.detect.outputs.stem }}"
+            echo "title=$TITLE" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.detect.outputs.pdf_found }}" == "true" ]; then
+            echo "display_name=${{ steps.detect.outputs.pdf_basename }}" >> "$GITHUB_OUTPUT"
+            TITLE=$(basename "${{ steps.detect.outputs.first_pdf }}" .pdf)
+            echo "title=$TITLE" >> "$GITHUB_OUTPUT"
+          fi
+
+      # =============================================
+      # Discord 送信（Webhook経由）- PPTX + PDF
+      # =============================================
+      - name: Send to Discord
+        if: steps.detect.outputs.found == 'true'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "::warning::DISCORD_WEBHOOK_URL is not set. Skipping Discord notification."
+            exit 0
+          fi
+
+          REPO="${{ github.repository }}"
+          BRANCH="${{ github.ref_name }}"
+          COMMIT_MSG=$(git log -1 --pretty=%s)
+          COMMIT_URL="${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
+          DISPLAY_NAME="${{ steps.resolve.outputs.display_name }}"
+
+          # 添付ファイルの構築
+          FILE_ARGS=""
+          FILE_INDEX=0
+          ATTACH_TEXT=""
+
+          PPTX_PATH="${{ steps.resolve.outputs.pptx_path }}"
+          PDF_PATH="${{ steps.resolve.outputs.pdf_path }}"
+
+          if [ -n "$PPTX_PATH" ] && [ -f "$PPTX_PATH" ]; then
+            FILE_ARGS="$FILE_ARGS -F files[$FILE_INDEX]=@$PPTX_PATH"
+            ATTACH_TEXT="$ATTACH_TEXT\n📊 PPTX: ${{ steps.resolve.outputs.pptx_basename }}"
+            FILE_INDEX=$((FILE_INDEX + 1))
+          fi
+
+          if [ -n "$PDF_PATH" ] && [ -f "$PDF_PATH" ]; then
+            FILE_ARGS="$FILE_ARGS -F files[$FILE_INDEX]=@$PDF_PATH"
+            ATTACH_TEXT="$ATTACH_TEXT\n📄 PDF: ${{ steps.resolve.outputs.pdf_basename }}"
+            FILE_INDEX=$((FILE_INDEX + 1))
+          fi
+
+          # Discord Embed メッセージを送信
+          curl -s $FILE_ARGS \
+          -F "payload_json={
+            \"embeds\": [{
+              \"title\": \"📊 ${{ steps.resolve.outputs.title }}\",
+              \"description\": \"コミット: ${COMMIT_MSG}${ATTACH_TEXT}\",
+              \"color\": 854563,
+              \"fields\": [
+                {\"name\": \"リポジトリ\", \"value\": \"${REPO}\", \"inline\": true},
+                {\"name\": \"ブランチ\", \"value\": \"${BRANCH}\", \"inline\": true},
+                {\"name\": \"ダウンロード\", \"value\": \"[GitHub で開く](${COMMIT_URL})\", \"inline\": false}
+              ],
+              \"footer\": {\"text\": \"Sincerely Slide Skill V2\"}
+            }]
+          }" \
+          "$DISCORD_WEBHOOK_URL"
+
+          echo "Discord に送信しました: $DISPLAY_NAME (PPTX + PDF)"
+
+      # =============================================
+      # メール送信（SMTP経由）- PPTX + PDF 添付
+      # =============================================
+      - name: Check email config
+        id: email_check
+        env:
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+          MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
+        run: |
+          if [ -z "$MAIL_PASSWORD" ] || [ -z "$MAIL_USERNAME" ]; then
+            echo "::warning::MAIL_PASSWORD または MAIL_USERNAME が未設定のため、メール送信をスキップします。"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build attachment list
+        if: steps.detect.outputs.found == 'true' && steps.email_check.outputs.configured == 'true'
+        id: attachments
+        run: |
+          ATTACH=""
+          PPTX_PATH="${{ steps.resolve.outputs.pptx_path }}"
+          PDF_PATH="${{ steps.resolve.outputs.pdf_path }}"
+
+          if [ -n "$PPTX_PATH" ] && [ -f "$PPTX_PATH" ]; then
+            ATTACH="$PPTX_PATH"
+          fi
+
+          if [ -n "$PDF_PATH" ] && [ -f "$PDF_PATH" ]; then
+            if [ -n "$ATTACH" ]; then
+              ATTACH="$ATTACH,$PDF_PATH"
+            else
+              ATTACH="$PDF_PATH"
+            fi
+          fi
+
+          echo "files=$ATTACH" >> "$GITHUB_OUTPUT"
+
+      - name: Send Email
+        if: steps.detect.outputs.found == 'true' && steps.email_check.outputs.configured == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "📊 ${{ steps.resolve.outputs.title }}"
+          to: ${{ secrets.MAIL_TO }}
+          from: ${{ secrets.MAIL_FROM }}
+          body: |
+            新しいスライドが作成されました。
+
+            ファイル名: ${{ steps.resolve.outputs.display_name }}
+            リポジトリ: ${{ github.repository }}
+            ブランチ: ${{ github.ref_name }}
+            コミット: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+
+            添付ファイル:
+            - PPTX: ${{ steps.resolve.outputs.pptx_basename }}
+            - PDF: ${{ steps.resolve.outputs.pdf_basename }}
+
+            GitHub上でもダウンロードできます:
+            - PPTX: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/${{ steps.resolve.outputs.pptx_path }}
+            - PDF: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/${{ steps.resolve.outputs.pdf_path }}
+          attachments: ${{ steps.attachments.outputs.files }}

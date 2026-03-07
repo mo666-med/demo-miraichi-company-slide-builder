@@ -1,0 +1,12 @@
+{
+  "name": "company-slide-builder",
+  "version": "2.0.0",
+  "description": "トヨマネ式メソッド＋Cynthialyデザインシステム＋ルバート図解パターンによる高度なスライド自動生成スキル",
+  "main": "scripts/template.js",
+  "scripts": {
+    "test": "node scripts/test.js"
+  },
+  "dependencies": {
+    "pptxgenjs": "^3.12.0"
+  }
+}
