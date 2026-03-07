@@ -186,7 +186,7 @@ jobs:
                 {\"name\": \"ブランチ\", \"value\": \"${BRANCH}\", \"inline\": true},
                 {\"name\": \"ダウンロード\", \"value\": \"[GitHub で開く](${COMMIT_URL})\", \"inline\": false}
               ],
-              \"footer\": {\"text\": \"Sincerely Slide Skill V2\"}
+              \"footer\": {\"text\": \"Company Slide Builder\"}
             }]
           }" \
           "$DISCORD_WEBHOOK_URL"
